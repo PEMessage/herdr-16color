@@ -106,7 +106,9 @@ jobs:
         run: |
           cp "herdr/target/${{ matrix.target }}/release/herdr" "${{ matrix.name }}"
           file "${{ matrix.name }}"
-          file "${{ matrix.name }}" | grep -q 'statically linked' # musl build sanity check
+          # Fully static check: modern rustc emits static-PIE musl binaries
+          # ("static-pie linked"), older wording is "statically linked".
+          file "${{ matrix.name }}" | grep -qE 'static(ally|-pie) linked'
           sha256sum "${{ matrix.name }}" > "${{ matrix.name }}.sha256"
 
       - name: Upload artifact

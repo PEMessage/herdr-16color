@@ -1,0 +1,58 @@
+diff --git a/src/protocol/render_ansi.rs b/src/protocol/render_ansi.rs
+index 97685d4d..52bb206c 100644
+--- a/src/protocol/render_ansi.rs
++++ b/src/protocol/render_ansi.rs
+@@ -252,7 +252,25 @@ fn color_to_sgr_fg(val: u32) -> String {
+             0x10 => "97".to_owned(), // White
+             _ => "39".to_owned(),    // Unknown → Reset
+         },
+-        0x01 => format!("38;5;{}", val & 0xFF), // Indexed
++        0x01 => match val & 0xFF {
++            0x00 => "30".to_owned(), // Black
++            0x01 => "31".to_owned(), // Red
++            0x02 => "32".to_owned(), // Green
++            0x03 => "33".to_owned(), // Yellow
++            0x04 => "34".to_owned(), // Blue
++            0x05 => "35".to_owned(), // Magenta
++            0x06 => "36".to_owned(), // Cyan
++            0x07 => "37".to_owned(), // Gray (light gray)
++            0x08 => "90".to_owned(), // DarkGray
++            0x09 => "91".to_owned(), // LightRed
++            0x0A => "92".to_owned(), // LightGreen
++            0x0B => "93".to_owned(), // LightYellow
++            0x0C => "94".to_owned(), // LightBlue
++            0x0D => "95".to_owned(), // LightMagenta
++            0x0E => "96".to_owned(), // LightCyan
++            0x0F => "97".to_owned(), // White
++            idx => format!("38;5;{idx}"),
++        },
+         0x02 => {
+             // RGB
+             let r = (val >> 16) & 0xFF;
+@@ -287,7 +305,25 @@ fn color_to_sgr_bg(val: u32) -> String {
+             0x10 => "107".to_owned(), // White
+             _ => "49".to_owned(),     // Unknown → Reset
+         },
+-        0x01 => format!("48;5;{}", val & 0xFF), // Indexed
++        0x01 => match val & 0xFF {
++            0x00 => "40".to_owned(), // Black
++            0x01 => "41".to_owned(), // Red
++            0x02 => "42".to_owned(), // Green
++            0x03 => "43".to_owned(), // Yellow
++            0x04 => "44".to_owned(), // Blue
++            0x05 => "45".to_owned(), // Magenta
++            0x06 => "46".to_owned(), // Cyan
++            0x07 => "47".to_owned(), // Gray (light gray)
++            0x08 => "100".to_owned(), // DarkGray
++            0x09 => "101".to_owned(), // LightRed
++            0x0A => "102".to_owned(), // LightGreen
++            0x0B => "103".to_owned(), // LightYellow
++            0x0C => "104".to_owned(), // LightBlue
++            0x0D => "105".to_owned(), // LightMagenta
++            0x0E => "106".to_owned(), // LightCyan
++            0x0F => "107".to_owned(), // White
++            idx => format!("48;5;{idx}"),
++        },
+         0x02 => {
+             let r = (val >> 16) & 0xFF;
+             let g = (val >> 8) & 0xFF;

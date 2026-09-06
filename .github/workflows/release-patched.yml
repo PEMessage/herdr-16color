@@ -1,0 +1,164 @@
+# Out-of-tree build of upstream herdr (herdrdev/herdr) with the classic
+# 16-color SGR patch applied, published to this repo's Releases.
+#
+# Nothing from upstream CI is copied here: the workflow checks out the chosen
+# upstream tag and reuses its source of truth directly — the Rust toolchain pin
+# (rust-toolchain.toml), the libghostty-vt build knobs, the build invocation,
+# and scripts/changelog.py for release notes — exactly as upstream's own
+# .github/workflows/release.yml does.
+name: Release patched herdr
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Upstream tag to build (any herdrdev/herdr tag, e.g. v0.8.2)
+        required: true
+        default: v0.8.2
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: herdrdev/herdr
+  # Keep in sync with the Zig version upstream CI installs
+  # (herdrdev/herdr .github/workflows/release.yml).
+  ZIG_VERSION: 0.15.2
+  # libghostty-vt knobs — same values as upstream release builds.
+  LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
+  LIBGHOSTTY_VT_SIMD: 'true'
+
+concurrency:
+  group: patched-${{ inputs.tag }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            name: herdr-linux-x86_64
+          - target: aarch64-unknown-linux-musl
+            name: herdr-linux-aarch64
+    steps:
+      # This repo: carries only the patch file.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6 (same pin as upstream CI)
+        with:
+          persist-credentials: false
+
+      # Upstream source at the tag chosen at dispatch time.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6 (same pin as upstream CI)
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ inputs.tag }}
+          path: herdr
+          persist-credentials: false
+
+      # Rust version is read from upstream's rust-toolchain.toml, never
+      # hardcoded here, so toolchain bumps upstream are picked up automatically.
+      - name: Read upstream Rust toolchain version
+        run: |
+          echo "RUST_TOOLCHAIN_VERSION=$(sed -n 's/^channel *= *"\(.*\)"/\1/p' herdr/rust-toolchain.toml)" >> "$GITHUB_ENV"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1 (same pin as upstream CI)
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN_VERSION }}
+          targets: ${{ matrix.target }}
+
+      - name: Install Zig
+        uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1 (same pin as upstream CI)
+        with:
+          version: ${{ env.ZIG_VERSION }}
+
+      - name: Install Linux build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build musl-tools crossbuild-essential-arm64
+
+      - name: Set aarch64 musl linker
+        if: matrix.target == 'aarch64-unknown-linux-musl'
+        run: echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2 (same pin as upstream CI)
+        with:
+          workspaces: herdr
+          key: ${{ matrix.target }}
+
+      # Fails loudly if the tag's source no longer matches the patch context.
+      - name: Apply classic 16-color SGR patch
+        working-directory: herdr
+        run: |
+          git apply --check ../patches/classic-16-color-sgr.patch
+          git apply ../patches/classic-16-color-sgr.patch
+
+      # Same build invocation as upstream's release workflow.
+      - name: Build
+        working-directory: herdr
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          cp "herdr/target/${{ matrix.target }}/release/herdr" "${{ matrix.name }}"
+          file "${{ matrix.name }}"
+          file "${{ matrix.name }}" | grep -q 'statically linked' # musl build sanity check
+          sha256sum "${{ matrix.name }}" > "${{ matrix.name }}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7 (same pin as upstream CI)
+        with:
+          name: ${{ matrix.name }}
+          path: |
+            ${{ matrix.name }}
+            ${{ matrix.name }}.sha256
+          retention-days: 7
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # Upstream checkout only to reuse its scripts/changelog.py for notes.
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6 (same pin as upstream CI)
+        with:
+          repository: ${{ env.UPSTREAM_REPO }}
+          ref: ${{ inputs.tag }}
+          path: herdr
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8 (same pin as upstream CI)
+        with:
+          merge-multiple: true
+
+      - name: Write release notes
+        run: |
+          tag="${{ inputs.tag }}"
+          upstream_commit="$(git -C herdr rev-parse HEAD)"
+          (cd herdr && python3 scripts/changelog.py extract --version "${tag#v}" --output ../UPSTREAM_NOTES.md)
+          {
+            echo "Out-of-tree build of [upstream $tag](https://github.com/${{ env.UPSTREAM_REPO }}/releases/tag/$tag) (commit \`$upstream_commit\`) with \`patches/classic-16-color-sgr.patch\` applied."
+            echo
+            echo "The patch re-encodes palette indices 0-15 as classic 16-color SGR (30-37/90-97 foreground, 40-47/100-107 background) instead of \`38;5;N\`/\`48;5;N\`, so the host terminal (e.g. Windows Terminal) can apply its own bold-as-bright policy."
+            echo
+            echo "### Upstream changes in this release"
+            echo
+            cat UPSTREAM_NOTES.md
+          } > RELEASE_NOTES.md
+
+      - name: Create release
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3 (same pin as upstream release.yml)
+        with:
+          tag_name: ${{ inputs.tag }}-patched.1
+          name: herdr ${{ inputs.tag }} (16-color patched)
+          body_path: RELEASE_NOTES.md
+          files: |
+            herdr-linux-x86_64
+            herdr-linux-x86_64.sha256
+            herdr-linux-aarch64
+            herdr-linux-aarch64.sha256
